@@ -6,73 +6,78 @@ export default async function handler(req, res) {
   const TAGLINE = process.env.RIOT_TAGLINE;
   const REGION = process.env.RIOT_REGION || "europe";
   const PLATFORM = process.env.RIOT_PLATFORM || "euw1";
+  const DAY_START_LP = Number(process.env.RIOT_DAY_START_LP || 0);
 
   try {
-    if (!API_KEY) throw new Error("RIOT_API_KEY fehlt");
-    if (!GAME_NAME) throw new Error("RIOT_GAME_NAME fehlt");
-    if (!TAGLINE) throw new Error("RIOT_TAGLINE fehlt");
-
-    const accountUrl = `https://${REGION}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(GAME_NAME)}/${encodeURIComponent(TAGLINE)}`;
-
-    const accountRes = await fetch(accountUrl, {
-      headers: { "X-Riot-Token": API_KEY }
-    });
-
+    const accountRes = await fetch(
+      `https://${REGION}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(GAME_NAME)}/${encodeURIComponent(TAGLINE)}`,
+      { headers: { "X-Riot-Token": API_KEY } }
+    );
     const account = await accountRes.json();
 
-    if (!accountRes.ok) {
-      return res.status(200).json({
-        step: "account",
-        status: accountRes.status,
-        message: account
-      });
-    }
-
-    const leagueUrl = `https://${PLATFORM}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`;
-
-    const leagueRes = await fetch(leagueUrl, {
-      headers: { "X-Riot-Token": API_KEY }
-    });
-
+    const leagueRes = await fetch(
+      `https://${PLATFORM}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`,
+      { headers: { "X-Riot-Token": API_KEY } }
+    );
     const leagues = await leagueRes.json();
+    const soloq = leagues.find(q => q.queueType === "RANKED_SOLO_5x5");
 
-    if (!leagueRes.ok) {
-      return res.status(200).json({
-        step: "league",
-        status: leagueRes.status,
-        message: leagues
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0,0,0,0);
+
+    const matchIdsRes = await fetch(
+      `https://${REGION}.api.riotgames.com/lol/match/v5/matches/by-puuid/${account.puuid}/ids?queue=420&startTime=${Math.floor(startOfDay.getTime()/1000)}&count=10`,
+      { headers: { "X-Riot-Token": API_KEY } }
+    );
+    const matchIds = await matchIdsRes.json();
+
+    let last5 = [];
+    let todayWins = 0;
+    let todayLosses = 0;
+
+    for (let id of matchIds.slice(0,5)) {
+      const matchRes = await fetch(
+        `https://${REGION}.api.riotgames.com/lol/match/v5/matches/${id}`,
+        { headers: { "X-Riot-Token": API_KEY } }
+      );
+      const match = await matchRes.json();
+      const player = match.info.participants.find(p => p.puuid === account.puuid);
+      if (!player) continue;
+
+      if (player.win) todayWins++;
+      else todayLosses++;
+
+      last5.push({
+        champion: player.championName,
+        win: player.win,
+        icon: `https://ddragon.leagueoflegends.com/cdn/15.1.1/img/champion/${player.championName}.png`
       });
     }
-
-    const soloq = leagues.find(q => q.queueType === "RANKED_SOLO_5x5");
 
     if (!soloq) {
       return res.status(200).json({
-        tier: "UNRANKED",
-        rank: "",
-        lp: 0,
-        wins: 0,
-        losses: 0,
-        winrate: 0
+        tier:"UNRANKED",
+        rank:"",
+        lp:0,
+        dailyLp:0,
+        todayWL:`${todayWins}W / ${todayLosses}L`,
+        last5
       });
     }
 
-    const wins = soloq.wins;
-    const losses = soloq.losses;
-    const winrate = Math.round((wins / (wins + losses)) * 100);
+    const dailyLp = soloq.leaguePoints - DAY_START_LP;
 
     return res.status(200).json({
       tier: soloq.tier,
       rank: soloq.rank,
       lp: soloq.leaguePoints,
-      wins,
-      losses,
-      winrate
+      dailyLp,
+      todayWL:`${todayWins}W / ${todayLosses}L`,
+      last5
     });
 
-  } catch (error) {
-    return res.status(200).json({
-      error: error.message
-    });
+  } catch (e) {
+    return res.status(200).json({ error: e.message });
   }
 }
