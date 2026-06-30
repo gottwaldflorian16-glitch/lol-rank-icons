@@ -8,26 +8,41 @@ export default async function handler(req, res) {
   const PLATFORM = process.env.RIOT_PLATFORM || "euw1";
 
   try {
-    const accountRes = await fetch(
-      `https://${REGION}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(GAME_NAME)}/${encodeURIComponent(TAGLINE)}`,
-      { headers: { "X-Riot-Token": API_KEY } }
-    );
+    if (!API_KEY) throw new Error("RIOT_API_KEY fehlt");
+    if (!GAME_NAME) throw new Error("RIOT_GAME_NAME fehlt");
+    if (!TAGLINE) throw new Error("RIOT_TAGLINE fehlt");
+
+    const accountUrl = `https://${REGION}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(GAME_NAME)}/${encodeURIComponent(TAGLINE)}`;
+
+    const accountRes = await fetch(accountUrl, {
+      headers: { "X-Riot-Token": API_KEY }
+    });
 
     const account = await accountRes.json();
 
-    const summonerRes = await fetch(
-      `https://${PLATFORM}.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/${account.puuid}`,
-      { headers: { "X-Riot-Token": API_KEY } }
-    );
+    if (!accountRes.ok) {
+      return res.status(200).json({
+        step: "account",
+        status: accountRes.status,
+        message: account
+      });
+    }
 
-    const summoner = await summonerRes.json();
+    const leagueUrl = `https://${PLATFORM}.api.riotgames.com/lol/league/v4/entries/by-puuid/${account.puuid}`;
 
-    const leagueRes = await fetch(
-      `https://${PLATFORM}.api.riotgames.com/lol/league/v4/entries/by-summoner/${summoner.id}`,
-      { headers: { "X-Riot-Token": API_KEY } }
-    );
+    const leagueRes = await fetch(leagueUrl, {
+      headers: { "X-Riot-Token": API_KEY }
+    });
 
     const leagues = await leagueRes.json();
+
+    if (!leagueRes.ok) {
+      return res.status(200).json({
+        step: "league",
+        status: leagueRes.status,
+        message: leagues
+      });
+    }
 
     const soloq = leagues.find(q => q.queueType === "RANKED_SOLO_5x5");
 
@@ -46,7 +61,7 @@ export default async function handler(req, res) {
     const losses = soloq.losses;
     const winrate = Math.round((wins / (wins + losses)) * 100);
 
-    res.status(200).json({
+    return res.status(200).json({
       tier: soloq.tier,
       rank: soloq.rank,
       lp: soloq.leaguePoints,
@@ -56,6 +71,8 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    res.status(500).json({ error: "Rank konnte nicht geladen werden." });
+    return res.status(200).json({
+      error: error.message
+    });
   }
 }
